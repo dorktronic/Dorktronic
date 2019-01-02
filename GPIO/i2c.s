@@ -1,0 +1,217 @@
+;
+;       6502 I2C ROUTINES  V1.0
+;       =======================
+;       THESE ROUTINES ARE OPTIMIZED FOR SIZE AND TAKE UP 256 BYTES TOTAL.
+;
+;       ASSUMES A COMMODORE 64/128 OR VIC-20 MACHINE WITH THE I2C LINES 
+;       CONNECTED TO THE USER PORT.  DON'T FORGET YOUR PULL-UP RESISTORS.
+;               SDA ON PB7
+;               SCL ON PB0
+;
+;       MAIN ENTRY POINTS ARE:
+;               JSR I2C_IN  AT ORG
+;                 INPUTS ONE BYTE FROM AN I2C DEVICE
+;                      A = DEVICE REGISTER ADDRESS
+;                      X = DEVICE NUMBER.
+;                        FOR C=GPIO USE $40 FOR PORTA-B, $42 FOR PORTC-D
+;                      RETURNS BYTE IN Y
+;
+;               JSR I2C_OUT AT ORG+3
+;                 OUTPUTS ONE BYTE TO AN I2C DEVICE
+;                      A = DEVICE REGISTER ADDRESS
+;                      X = DEVICE NUMBER.
+;                        FOR C=GPIO USE $40 FOR PORTA-B, $42 FOR PORTC-D
+;                      Y = DATA BYTE TO SEND
+;       
+;       TABLE OF COMMON REGISTER ADDRESSES FOR THE C=GPIO BOARD
+;         REG NAME   DESC
+;        +---+------+------------------------------------------------------+
+;        |$00|IODIRA|I/O PIN DIRECTION PORT A/C (0=OUTPUT, 1=INPUT)        |
+;        |$01|IODIRB|I/O PIN DIRECTION PORT B/D (0=OUTPUT, 1=INPUT)        |
+;        |$0C|GPPUA |I/O PIN PULLUP ENABLE PORT A/C (0=DISABLED, 1=ENABLED)|
+;        |$0D|GPPUB |I/O PIN PULLUP ENABLE PORT B/D (0=DISABLED, 1=ENABLED)|
+;        |$12|GPIOA |I/O PORT A/C DATA REGISTER (0=LOW 0V, 1=HIGH 5V)      |
+;        |$13|GPIOB |I/O PORT B/D DATA REGISTER (0=LOW 0V, 1=HIGH 5V)      |
+;        +---+------+------------------------------------------------------+
+;
+;
+;       BE SURE TO CHOOSE YOUR COMPUTER BELOW, AND SET UP THE ORG ADDRESS WHERE
+;       YOU WANT THESE ROUTINES TO BE LOCATED.
+;
+
+        PROCESSOR 6502
+
+ZP      = $FB
+DEVICE  = $FC
+ADDR    = $FD
+DATA    = $FE
+
+COMP    = "C64"
+;COMP    = "VIC20"
+
+        IF COMP == "C64"
+        ECHO "C64 MODE"
+IOPORT  = $DD01
+IODDIR  = $DD03
+        ORG $C000 ; ANY PAGE WILL DO
+        ENDIF
+
+        IF COMP == "VIC20"
+        ECHO "VIC20 MODE"
+IOPORT  = $9110
+IODDIR  = $9112
+        ORG $A000 ; ANY PAGE WILL DO, THIS USES A RAM EXPANSION AT BLOCK 5
+        ENDIF
+
+CODESTART
+
+;       A = DEVICE REGISTER
+I2C_IN  JMP _I2C_IN
+
+;       A = I2C REGISTER NUMBER
+;       X = I2C DEVICE NUMBER.  FOR C=GPIO USE $40 FOR PORTA-B, $42 FOR PORTC-D
+;       Y = DATA BYTE TO SEND
+I2C_OUT SUBROUTINE
+        STY DATA        ; SAVE DATA BYTE FOR I2C ROUTINES
+        JSR SETDEV      ; SET UP DEVICE NUMBER AND DEVICE REGISTER ADDRESS
+        BCS .ABORT
+        LDA DATA
+        JSR PUTBYTE     ; WRITE OUT THE DATA BYTE AND..
+        JSR GETACK      ; ..WAIT FOR AN OK
+        BCS .ABORT
+        JSR STOP        ; THEN STOP
+.ABORT  CLI             ; TURN ON INTERRUPTS
+        RTS             ; RETURNS, PRETTY MUCH ALL REGISTERS MUNGED
+
+;       A = I2C REGISTER NUMBER
+;       X = I2C DEVICE NUMBER.  FOR C=GPIO USE $40 FOR PORTA-B, $42 FOR PORTC-D
+;       RETURNS BYTE IN Y
+_I2C_IN  SUBROUTINE
+        JSR SETDEV      ; SET UP DEVICE NUMBER AND DEVICE REGISTER ADDRESS
+        BCS .ABORT
+        JSR START       ; I2C RESTART REQUIRED DUE TO THE SWITCH TO READ MODE
+        LDA DEVICE
+        ORA #$01        ; HIGH BIT 0 MEANS READ
+        JSR PUTBYTE     ; WRITE OUT THE DEVICE ID BYTE AND..
+        JSR GETACK      ; ..WAIT FOR AN OK
+        BCS .ABORT
+        JSR GETBYTE     ; READ THE RESULTING BYTE AND..
+        TAY             ; ..SAVE IT
+        JSR STOP        ; THEN STOP
+.ABORT  CLI             ; TURN ON INTERRUPTS
+        RTS             ; RETURNS, PRETTY MUCH ALL REGISTERS MUNGED
+
+SETDEV  SUBROUTINE      ; SET DEVICE NUM AND DEVICE REGISTER ADDRESS
+        STX DEVICE      ; SAVE DEVICE NUM FOR I2C ROUTINES
+        STA ADDR        ; SAVE DEVICE REGISTER ADDRESS FOR I2C ROUTINES
+        SEI             ; TURN OFF INTERRUPTS
+        JSR INIT        ; INITIALIZE THE BUS PROTOCOL
+        JSR START       ; SENDS I2C START CODE
+        LDA DEVICE
+        AND #$FE        ; LOW BIT 0 MEANS WRITE
+        JSR PUTBYTE     ; WRITE OUT THE DEVICE ID BYTE AND..
+        JSR GETACK      ; ..WAIT FOR AN OK
+        BCS .ABORT
+        LDA ADDR
+        JSR PUTBYTE     ; SEND THE DEVICE REGISTER ADDRESS AND..
+        JSR GETACK      ; ..WAIT FOR AN OK
+.ABORT  RTS
+
+        SUBROUTINE
+SDA0    LDA #$80        ; JSR HERE TO CLEAR SDA
+        DC.B $2C ; BIT SKIP
+SCK0    LDA #$01        ; JSR HERE TO CLEAR SCK
+        ORA IODDIR
+        STA IODDIR
+        RTS
+SDA1    LDA #$3F        ; JSR HERE TO SET SDA
+        DC.B $2C ; BIT SKIP
+SCK1    LDA #$FE        ; JSR HERE TO SET SCK
+        AND IODDIR
+        STA IODDIR
+        RTS
+
+INIT    SUBROUTINE      ; INITIALIZES THE I2C BUS
+        LDA #0
+        STA IOPORT      ; CLEAR USER PORT BITS
+        STA IODDIR      ; MAKE USER PORT INPUTS
+        JSR SDA1        ; I2C PROTOCOL FOR INIT
+        JSR SCK0        ; SDA HIGH, SCK LOW...
+        LDX #4
+.1      JSR STOP        ; ...THEN SEND STOP FOUR TIMES
+        DEX
+        BNE .1
+        RTS
+
+START   SUBROUTINE      ; I2C PROTOCOL FOR STARTING A TRANSFER
+        JSR SCK1
+        JSR SDA1
+        JSR SDA0
+        JSR SCK0
+        JSR SDA1
+        RTS
+
+STOP    SUBROUTINE      ; I2C PROTOCOL FOR STOPPING A TRANSFER
+        JSR SDA0
+        JSR SCK1
+        JSR SDA1
+        RTS
+
+PUTBYTE SUBROUTINE      ; SERIALLY WRITE BYTE TO I2C BUS
+        STA ZP
+        LDX #8          ; 8 TIMES..
+.3      BIT ZP          ; ..SEND THE HIGH BIT
+        BMI .1
+        JSR SDA0
+        JMP .2
+.1      JSR SDA1
+.2      JSR SCK1
+        JSR SCK0
+        ASL ZP          ; SHIFT TO THE NEXT BIT
+        DEX             ; REPEAT
+        BNE .3
+        JSR SDA1
+        RTS
+
+GETBYTE SUBROUTINE      ; SERIALLY READ A BYTE FROM THE I2C BUS
+        LDX #8
+.1      JSR SCK1
+        LDA IOPORT      ; READ FROM THE DEVICE INTO BIT 7
+        ROL             ; SHIFT THAT INTO ZP..
+        ROL ZP
+        JSR SCK0
+        DEX             ; ..8 TIMES..
+        BNE .1
+        JSR SDA1
+        LDA ZP          ; ..TO GET OUR BYTE.
+        RTS
+
+GIVEACK SUBROUTINE      ; SEND AN ACKNOWLEDGEMENT SEQUENCE
+        JSR SDA0
+        JSR SCK1
+        JSR SCK0
+        JSR SDA1
+        RTS
+
+GETACK  SUBROUTINE      ; WAIT FOR AN ACKNOWLEDGEMENT SEQUENCE
+        ; LDX #0        ; DON'T REALLY NEED TO INIT X HERE, IT'S OK IF
+                        ; THE WATCHDOG IS A TAD SHORTER
+        LDY #0
+        JSR SDA1
+        JSR SCK1
+.1      DEX             ; X/Y IS 16 BIT WATCHDOG HERE
+        BEQ .2          ; IF WE DEX ALL THE WAY TO ZERO JUMP DOWN AND DEY
+        BIT IOPORT      ; READ FROM THE DEVICE INTO BIT 7
+        BMI .1          ; DEVICE HAS ACKNOWLEDGED WHEN BIT GOES LOW
+        JSR SCK0
+        CLC             ; RETURN WITH CARRY CLEAR, MEANS SUCCESS
+        RTS
+.2      DEY
+        BNE .1          ; IF WE DEY ALL THE WAY TO ZERO..
+        JSR STOP        ; ..TIMEOUT AND..
+        SEC             ; RETURN WITH CARRY SET, MEANS BUS ERROR FAIL
+        RTS             ; ...PRETTY MUCH THE DEVICE DIDN'T RESPOND
+
+
+CODEEND
+        ECHO (CODEEND-CODESTART), "BYTES USED."
