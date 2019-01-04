@@ -90,11 +90,6 @@ BASERR  = BASIC + $0469
 BASRETV = BASIC + $1391
 
 CODESTART
-        ; C64 CART
-        ; DC.W RESET
-        ; DC.W NMI
-        ; DC.B $C3, $C2, $CD, $38, $30  ;ROM PRESENT SIGNATURE
-
         IF COMP == "VIC20"
         DC.W RESET
         DC.W NMI
@@ -102,21 +97,6 @@ CODESTART
         ENDIF        
 
 RESET
-        IF COMP == "C64"
-        ; C64 RESET
-        STX $D016             ; TURN ON VIC FOR PAL / NTSC CHECK
-        JSR $FDA3             ; IOINIT - INIT CIA CHIPS
-        JSR $FD50             ; RANTAM - CLEAR/TEST SYSTEM RAM
-        JSR $FD15             ; RESTOR - INIT KERNAL RAM VECTORS
-        JSR $FF5B             ; CINT   - INIT VIC AND SCREEN EDITOR
-        CLI                   ; RE-ENABLE IRQ INTERRUPTS
-        JSR $E453             ; INIT BASIC RAM VECTORS
-        JSR $E3BF             ; MAIN BASIC RAM INIT ROUTINE
-        JSR $E422             ; POWER-UP MESSAGE / NEW COMMAND
-        LDX #$FB                   
-        TXS                   ; REDUCE STACK POINTER FOR BASIC
-        ENDIF
-
         IF COMP == "VIC20"
         ; VIC-20 RESET
         JSR $FD8D             ; INITIALISE AND TEST RAM
@@ -156,7 +136,9 @@ RESET
         STA SHADOW+$7
         STA SHADOW+$A
 
+        IF COMP == "VIC20"
         JMP BASWARM           ; READY
+        ENDIF        
 
 NMI
         RTS                   ; NMI JUST RETURNS
